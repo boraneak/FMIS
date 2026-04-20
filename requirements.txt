@@ -1,0 +1,8 @@
+Faker==40.15.0
+pandas==3.0.2
+SQLAlchemy==2.0.49
+psycopg2-binary==2.9.11
+fastapi==0.136.0
+uvicorn==0.44.0
+python-dotenv==1.2.2
+black==26.3.1

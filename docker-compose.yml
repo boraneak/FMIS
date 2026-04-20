@@ -1,0 +1,109 @@
+# Common configuration to keep it DRY (Don't Repeat Yourself)
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.7.1
+  restart: always
+  deploy:
+    resources:
+      limits:
+        memory: 1536M # Cap memory to prevent host system crashes
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY} # Loaded from .env
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./data:/opt/airflow/data  # The bridge to airflow's internal data directory
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # --- PERSISTENT STORAGE ---
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fmis-network
+
+  # --- ORCHESTRATION ---
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    networks:
+      - fmis-network
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    networks:
+      - fmis-network
+
+  # --- LIGHTWEIGHT STREAMING ---
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.8
+    restart: always
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data # Persistence added
+    ports:
+      - "19092:19092"
+    networks:
+      - fmis-network
+
+  # --- ANALYTICS ---
+  metabase:
+    image: metabase/metabase:latest
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DB: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: airflow
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: postgres
+    volumes:
+      - metabase_data:/metabase-data
+    depends_on:
+      - postgres
+    networks:
+      - fmis-network
+
+networks:
+  fmis-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  metabase_data:
+  redpanda_data:
